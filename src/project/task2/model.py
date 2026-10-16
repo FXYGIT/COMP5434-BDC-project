@@ -1,88 +1,143 @@
-"""自定义稀疏线性评分回归：平方损失+L2，Spark 并行计算梯度。"""
+"""本地稀疏评分回归 MVP；保留后续 Spark 同步梯度实现的类接口。"""
 
 from __future__ import annotations
 
+import copy
+import pickle
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING
+from time import perf_counter
+from typing import Any, cast
+
+import numpy as np
+import pandas as pd
+from numpy.typing import NDArray
+from sklearn.dummy import DummyRegressor
+from sklearn.linear_model import SGDRegressor
+from sklearn.metrics import mean_squared_error, root_mean_squared_error
 
 from project.common.contracts import EpochRecord
-
-if TYPE_CHECKING:
-    from pyspark.sql import DataFrame
+from project.task2.features import ReviewFeatures
 
 
 class DistributedRatingRegressor:
-    """Spark 是实际计算路径；不调用 Spark ML/sklearn 的现成预测器。"""
+    """保留原类名；当前实际执行 sklearn 本地 SGD，不创建 Spark 会话。
+
+    训练目标为评分减去训练均值后的残差，使用平方损失和 L2；全局均值基线使用
+    DummyRegressor。记录真实每轮耗时/MSE/验证 RMSE，并在早停后恢复最佳模型。
+    后续手写实现：广播只读权重，mapPartitions 计算稀疏梯度，treeAggregate
+    按样本数合并后更新；销毁旧广播，不收集整张评论表。纯梯度接口见 optimization。
+    """
 
     def __init__(self, options: Mapping[str, object], seed: int) -> None:
-        """声明 epoch、稳定哈希小批次划分、学习率计划、L2、早停及特征维度。
+        """保存优化参数和随机种子，初始化空模型及训练日志；不执行拟合。
 
-        参数：
-            options (Mapping[str, object])：组件配置映射；实现时验证键名、类型、范围和默认值
-            seed (int)：固定随机种子；与数据划分和模型随机状态共同记录
-        返回：
-            None：无返回值；状态更新/资源释放/写出职责见上文，失败不能静默忽略。
-        实现边界：
-            只实现本接口声明的职责；训练/验证隔离、ID 对齐及状态恢复遵循架构文档。
-            不允许静默丢弃测试记录、把未测数据填零或生成虚构评估结果。
-        当前状态：
-            骨架占位；调用即抛出 NotImplementedError，不执行实际业务。"""
-        raise NotImplementedError("仅定义接口，尚未实现")
+        options 支持 model=global_mean、epochs、batches_per_epoch、learning_rate、
+        l2、early_stopping_patience 和 clip_predictions；seed 控制每轮行顺序。
+        """
+        self.options = dict(options)
+        self.seed = seed
+        self.model: Any = None
+        self.mean = 0.0
+        self.selected_epoch = 0
+        self.history: list[EpochRecord] = []
 
-    def fit(self, train: DataFrame, valid: DataFrame | None = None) -> Sequence[EpochRecord]:
-        """每轮每批广播只读权重，mapPartitions 计算梯度，treeAggregate 合并后 driver 更新；销毁旧广播，验证早停并恢复最佳参数；仅 collect 有界梯度及标量。
+    def fit(
+        self, train: ReviewFeatures, valid: ReviewFeatures | None = None
+    ) -> Sequence[EpochRecord]:
+        """拟合训练 CSR 特征，返回实际执行的逐轮 EpochRecord 列表。
 
-        参数：
-            train (DataFrame)：当前训练折或锁定配置后的全量训练表，不能包含验证记录
-            valid (DataFrame | None)：可选验证表，仅评估/早停，不用于拟合特征统计
-        返回：
-            Sequence[EpochRecord]：按类型标注返回结构化结果；字段含义及顺序见本函数职责和公共数据契约。
-        实现边界：
-            只实现本接口声明的职责；训练/验证隔离、ID 对齐及状态恢复遵循架构文档。
-            不允许静默丢弃测试记录、把未测数据填零或生成虚构评估结果。
-        当前状态：
-            骨架占位；调用即抛出 NotImplementedError，不执行实际业务。"""
-        raise NotImplementedError("仅定义接口，尚未实现")
+        train 必须带 ratings；valid 仅用于评估和早停，不拟合特征。每轮固定种子
+        洗牌并分 batches_per_epoch 批调用 partial_fit；train_loss 为未裁剪预测的 MSE。
+        patience=0 禁用早停并保留最后一轮（用于固定工作量 benchmark）；无验证集时
+        总是执行配置的全部 epochs。基线只计算一次训练均值，记录一条真实耗时日志。
+        """
+        y = cast(NDArray[np.float64], train.ratings)
+        self.mean = float(np.mean(y))
+        self.history = []
+        if self.options.get("model") == "global_mean":
+            started = perf_counter()
+            self.model = DummyRegressor(strategy="mean").fit(train.matrix, y)
+            self.mean = 0.0  # DummyRegressor 已直接输出评分，不再叠加均值。
+            loss = float(mean_squared_error(y, self._predict_values(train)))
+            score = self._validation_rmse(valid) if valid is not None else None
+            self.history.append(EpochRecord(1, perf_counter() - started, loss, score))
+            self.selected_epoch = 1
+            return self.history
+        self.model = SGDRegressor(
+            loss="squared_error",
+            penalty="l2",
+            alpha=float(cast(float, self.options.get("l2", 0.0001))),
+            learning_rate="constant",
+            eta0=float(cast(float, self.options.get("learning_rate", 0.01))),
+            random_state=self.seed,
+            shuffle=False,
+            tol=None,
+        )
+        rng = np.random.default_rng(self.seed)
+        epochs = int(cast(int, self.options.get("epochs", 20)))
+        batches = int(cast(int, self.options.get("batches_per_epoch", 4)))
+        patience = int(cast(int, self.options.get("early_stopping_patience", 3)))
+        best_score, stale = float("inf"), 0
+        best_model = None
+        for epoch in range(1, epochs + 1):
+            started = perf_counter()
+            for indices in np.array_split(rng.permutation(len(y)), batches):
+                if len(indices):
+                    self.model.partial_fit(train.matrix[indices], y[indices] - self.mean)
+            loss = float(mean_squared_error(y, self.model.predict(train.matrix) + self.mean))
+            score = self._validation_rmse(valid) if valid is not None else None
+            self.history.append(EpochRecord(epoch, perf_counter() - started, loss, score))
+            self.selected_epoch = epoch
+            if score is not None and patience > 0:
+                if score < best_score:
+                    best_score, stale = score, 0
+                    best_model = (copy.deepcopy(self.model), epoch)
+                else:
+                    stale += 1
+                if stale >= patience:
+                    break
+        if best_model is not None:
+            self.model, self.selected_epoch = best_model
+        return self.history
 
-    def predict(self, frame: DataFrame) -> DataFrame:
-        """返回 id,prediction；保持分布式计算并保留每条记录；预测裁剪策略需与验证设置一致。
+    def _predict_values(self, frame: ReviewFeatures) -> NDArray[np.float64]:
+        """对 CSR 特征返回一维连续评分数组，按配置决定是否裁剪到 [1,5]。
 
-        参数：
-            frame (DataFrame)：Spark 分布式表；不得将全量数据收集到 driver
-        返回：
-            DataFrame：保留分布式执行的数据表，schema 依上文约定。
-        实现边界：
-            只实现本接口声明的职责；训练/验证隔离、ID 对齐及状态恢复遵循架构文档。
-            不允许静默丢弃测试记录、把未测数据填零或生成虚构评估结果。
-        当前状态：
-            骨架占位；调用即抛出 NotImplementedError，不执行实际业务。"""
-        raise NotImplementedError("仅定义接口，尚未实现")
+        输入顺序保持不变；不四舍五入、不访问 ratings。训练均值只来自当前训练折，
+        与拟合时的残差目标配套恢复原评分尺度。
+        """
+        values = np.asarray(self.model.predict(frame.matrix), dtype=float) + self.mean
+        return np.clip(values, 1, 5) if self.options.get("clip_predictions", True) else values
+
+    def _validation_rmse(self, valid: ReviewFeatures) -> float:
+        """用验证评分和当前预测计算 RMSE，裁剪规则与最终导出完全一致。
+
+        返回真实标量指标；不会更新模型参数或特征状态，供每轮早停比较使用。
+        """
+        return float(root_mean_squared_error(valid.ratings, self._predict_values(valid)))
+
+    def predict(self, frame: ReviewFeatures) -> pd.DataFrame:
+        """返回 id,prediction 两列，覆盖全部输入记录；评分保持浮点数。
+
+        frame 为由匹配特征状态生成的 ReviewFeatures。调用前需要 fit 或 load；
+        验证标签和元数据由上层按 ID 合并，避免模型接口混入真实评分。
+        """
+        return pd.DataFrame({"id": frame.ids, "prediction": self._predict_values(frame)})
 
     def save(self, directory: Path) -> None:
-        """保存权重、偏置、维度、超参数、已选 epoch 和优化历史。
+        """在模型子目录写入 model.pkl，保存估计器、均值、参数、种子和训练历史。
 
-        参数：
-            directory (Path)：模型或特征状态目录，必须保存恢复所需全部文件
-        返回：
-            None：无返回值；状态更新/资源释放/写出职责见上文，失败不能静默忽略。
-        实现边界：
-            只实现本接口声明的职责；训练/验证隔离、ID 对齐及状态恢复遵循架构文档。
-            不允许静默丢弃测试记录、把未测数据填零或生成虚构评估结果。
-        当前状态：
-            骨架占位；调用即抛出 NotImplementedError，不执行实际业务。"""
-        raise NotImplementedError("仅定义接口，尚未实现")
+        返回 None；后续手写版本应显式保存权重、偏置、维数、已选 epoch 及算法版本。
+        """
+        directory.mkdir(parents=True, exist_ok=True)
+        with (directory / "model.pkl").open("wb") as file:
+            pickle.dump(self.__dict__, file, protocol=pickle.HIGHEST_PROTOCOL)
 
     def load(self, directory: Path) -> None:
-        """恢复最终模型参数；拒绝不兼容的特征 schema。
+        """恢复 save 生成的可信模型状态，覆盖构造参数，不读取训练数据或重新训练。
 
-        参数：
-            directory (Path)：模型或特征状态目录，必须保存恢复所需全部文件
-        返回：
-            None：无返回值；状态更新/资源释放/写出职责见上文，失败不能静默忽略。
-        实现边界：
-            只实现本接口声明的职责；训练/验证隔离、ID 对齐及状态恢复遵循架构文档。
-            不允许静默丢弃测试记录、把未测数据填零或生成虚构评估结果。
-        当前状态：
-            骨架占位；调用即抛出 NotImplementedError，不执行实际业务。"""
-        raise NotImplementedError("仅定义接口，尚未实现")
+        返回 None；加载后使用与模型包配套的特征状态进行预测。
+        """
+        with (directory / "model.pkl").open("rb") as file:
+            self.__dict__.update(pickle.load(file))

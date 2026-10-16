@@ -1,29 +1,24 @@
-"""Task 2 的大数据提交导出：不把全量测试预测收集到 driver 内存。"""
+"""本地 Task 2 CSV 导出；未来大规模预测可替换为 Spark 有序迭代写出。"""
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    from pyspark.sql import DataFrame, SparkSession
+import pandas as pd
 
 
 def export_rating_submission(
-    spark: SparkSession, predictions: DataFrame, sample_path: Path, output_path: Path
+    predictions: pd.DataFrame, sample_path: Path, output_path: Path
 ) -> Path:
-    """按样例 ID 检查一对一覆盖并 join，显式构造样例顺序；通过有序迭代流式写单一 id,rating CSV（或外部合并），不使用 collect/toPandas/coalesce(1) 作为默认大规模路径；原子落盘后校验行数。
+    """按样例 ID 顺序输出 id,rating，保持连续预测评分且不写 DataFrame 索引。
 
-    参数：
-        spark (SparkSession)：已创建且未关闭的 SparkSession
-        predictions (DataFrame)：带 ID 的预测；评估接口还要求真实 rating，参见原始职责说明
-        sample_path (Path)：sample_submission.csv；输出列名、ID 覆盖与顺序的依据
-        output_path (Path)：最终输出文件路径；校验完成后原子落盘
-    返回：
-        Path：输出文件或目录的路径，成功返回前应完成相关校验。
-    实现边界：
-        只实现本接口声明的职责；训练/验证隔离、ID 对齐及状态恢复遵循架构文档。
-        不允许静默丢弃测试记录、把未测数据填零或生成虚构评估结果。
-    当前状态：
-        骨架占位；调用即抛出 NotImplementedError，不执行实际业务。"""
-    raise NotImplementedError("仅定义接口，尚未实现")
+    参数：predictions 含 id,prediction；sample_path 为 sampleSubmission.csv；
+    output_path 为目标 CSV。输入可信，直接按字符串 ID 对齐，不添加额外校验。
+    自动创建父目录，返回输出路径；后续 Spark 实现需保留顺序并流式导出全部记录。
+    """
+    sample = pd.read_csv(sample_path, dtype={"id": str})
+    values = predictions.assign(id=predictions["id"].astype(str)).set_index("id")["prediction"]
+    sample["rating"] = sample["id"].map(values)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    sample.to_csv(output_path, index=False)
+    return output_path

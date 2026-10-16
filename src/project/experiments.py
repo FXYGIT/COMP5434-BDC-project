@@ -14,6 +14,7 @@ from project.common.artifacts import ArtifactStore
 from project.common.contracts import TaskConfig
 from project.task1.pipeline import _prepare_run
 from project.task1.training import evaluate_candidate
+from project.task2 import pipeline as task2
 
 
 def run_baselines(config: TaskConfig) -> Sequence[Mapping[str, object]]:
@@ -27,9 +28,25 @@ def run_baselines(config: TaskConfig) -> Sequence[Mapping[str, object]]:
         只实现本接口声明的职责；训练/验证隔离、ID 对齐及状态恢复遵循架构文档。
         不允许静默丢弃测试记录、把未测数据填零或生成虚构评估结果。
     当前状态：
-        Task 1 MVP 使用第三方模型和 pandas 汇总；Task 2 实验待实现。"""
+        Task 1/2 MVP 使用本地第三方模型和 pandas 汇总；Spark 并行实验待接入。"""
     if config.task == "task2":
-        raise NotImplementedError("Task 2 实验待实现")
+        return _run_variants(
+            config,
+            [
+                (
+                    "global_mean",
+                    {
+                        "model": "global_mean",
+                        "use_title": False,
+                        "use_comment": False,
+                        "use_metadata": False,
+                    },
+                ),
+                ("text_only", {"use_metadata": False}),
+                ("text_metadata", {}),
+            ],
+            "baseline",
+        )
     return _run_variants(
         config,
         [
@@ -52,9 +69,20 @@ def run_ablations(config: TaskConfig) -> Sequence[Mapping[str, object]]:
         只实现本接口声明的职责；训练/验证隔离、ID 对齐及状态恢复遵循架构文档。
         不允许静默丢弃测试记录、把未测数据填零或生成虚构评估结果。
     当前状态：
-        Task 1 MVP 使用第三方模型和 pandas 汇总；Task 2 实验待实现。"""
+        Task 1/2 MVP 使用本地第三方模型和 pandas 汇总；Spark 并行实验待接入。"""
     if config.task == "task2":
-        raise NotImplementedError("Task 2 实验待实现")
+        return _run_variants(
+            config,
+            [
+                ("full", {}),
+                ("no_title", {"use_title": False}),
+                ("no_comment", {"use_comment": False}),
+                ("no_metadata", {"use_metadata": False}),
+                ("no_idf", {"use_idf": False}),
+                ("no_clipping", {"clip_predictions": False}),
+            ],
+            "ablate",
+        )
     return _run_variants(
         config,
         [
@@ -81,9 +109,17 @@ def run_scaling_study(
         只实现本接口声明的职责；训练/验证隔离、ID 对齐及状态恢复遵循架构文档。
         不允许静默丢弃测试记录、把未测数据填零或生成虚构评估结果。
     当前状态：
-        Task 1 MVP 使用第三方模型和 pandas 汇总；Task 2 实验待实现。"""
+        Task 1/2 MVP 使用本地第三方模型和 pandas 汇总；Spark 并行实验待接入。"""
     if config.task == "task2":
-        raise NotImplementedError("Task 2 Spark 并行实验待实现")
+        # 本地 MVP 测量实际 joblib 特征转换线程；固定 epoch 并禁用早停。
+        return _run_variants(
+            config,
+            [
+                (f"n_jobs_{workers}", {"n_jobs": workers, "early_stopping_patience": 0})
+                for workers in parallelisms
+            ],
+            "benchmark",
+        )
     # Task 1 用 sklearn 的 n_jobs 比较 CPU 并行度，工作量及划分保持一致。
     results = _run_variants(
         config,
@@ -105,7 +141,7 @@ def export_report_tables(run_directories: Sequence[Path], output_dir: Path) -> P
         只实现本接口声明的职责；训练/验证隔离、ID 对齐及状态恢复遵循架构文档。
         不允许静默丢弃测试记录、把未测数据填零或生成虚构评估结果。
     当前状态：
-        Task 1 MVP 使用第三方模型和 pandas 汇总；Task 2 实验待实现。"""
+        Task 1/2 MVP 使用本地第三方模型和 pandas 汇总；Spark 并行实验待接入。"""
     output_dir.mkdir(parents=True, exist_ok=True)
     rows = []
     for directory in run_directories:
@@ -121,16 +157,32 @@ def _run_variants(
     variants: Sequence[tuple[str, Mapping[str, object]]],
     stage: str,
 ) -> list[dict[str, Any]]:
+    """在同一划分上运行配置变体，保存可汇总的结果并返回逐方案字典。
+
+    config 指定基础参数；variants 为名称与参数覆盖列表；stage 指定运行阶段。
+    Task 2 单独记录 local 后端及数据上限。benchmark 加速比以列表首项为参照，
+    Task 1 测训练时间，Task 2 测本地特征转换时间，不声称测量了 Spark 加速。
+    """
     # 共用随机种子和同一份 split.json，确保对比的是相同验证记录。
-    run_config = _prepare_run(config, stage)
+    prepare = task2._prepare_run if config.task == "task2" else _prepare_run
+    evaluate = task2.evaluate_candidate if config.task == "task2" else evaluate_candidate
+    run_config = prepare(config, stage)
     results: list[dict[str, Any]] = []
     for name, changes in variants:
         candidate = replace(run_config, params={**config.params, **changes})
-        result = evaluate_candidate(candidate)
+        result = evaluate(candidate)
         results.append({"variant": name, **asdict(result)})
     if stage == "benchmark":
-        reference = results[0]["diagnostics"]["training_seconds"]
+        timing = "feature_transform_seconds" if config.task == "task2" else "training_seconds"
+        reference = results[0]["diagnostics"][timing]
         for row in results:
-            row["diagnostics"]["speedup"] = reference / row["diagnostics"]["training_seconds"]
-    ArtifactStore(run_config.output_dir).write_results({"stage": stage, "results": results})
+            row["diagnostics"]["speedup"] = reference / row["diagnostics"][timing]
+    ArtifactStore(run_config.output_dir).write_results(
+        {
+            "stage": stage,
+            "backend": "local",
+            "results": results,
+            "max_train_rows": config.params.get("max_train_rows"),
+        }
+    )
     return results

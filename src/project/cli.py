@@ -40,7 +40,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     ablate.add_argument("--config", type=Path, required=True, help="配置文件路径")
 
     # benchmark：比较不同并行度下的运行效率。
-    benchmark = commands.add_parser("benchmark", help="运行 Spark 并行度实验")
+    benchmark = commands.add_parser("benchmark", help="运行本地并行度实验（Spark 待接入）")
     benchmark.add_argument("--config", type=Path, required=True, help="配置文件路径")
     benchmark.add_argument(
         "--parallelisms",

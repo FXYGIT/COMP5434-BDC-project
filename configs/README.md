@@ -1,7 +1,7 @@
 # 模板配置使用说明
 
 `task1.json` 对应天气分类，`task2.json` 对应评论评分预测。
-参数是待验证的起始值，不是已调优结果；相关训练与特征模块尚未实现。
+参数是待验证的起始值，不是已调优结果；当前 Task 1/2 均可运行本地 MVP。
 
 ## 公共字段
 
@@ -28,11 +28,12 @@ class_weight：类别权重策略；missing_indicators：是否增加缺失指�
 
 ## Task 2 参数
 
-spark_master：Spark 运行模式，local[*] 使用本机可用核心；partitions：数据分区数；
+当前使用本地后端，不创建 Spark 会话。max_train_rows：训练 CSV 前 N 行，默认 50000，null 为全量；
+n_jobs：本地特征转换线程数，默认 1，测试集始终完整读取；
 split_strategy / valid_fraction：稳定哈希分组划分及验证比例；
-model：自定义分布式线性回归；text_dimension_per_field：标题和正文各自的哈希维度；
+model：当前为 sklearn SGD 回归，后续替换为自定义分布式线性回归；text_dimension_per_field：标题和正文各自的哈希维度；
 use_title / use_comment / use_metadata / use_idf：对应特征开关；
-use_target_encoding：是否加入折外目标编码，默认关闭；
+use_target_encoding：预留折外目标编码选项，当前未实现，保持 false；
 epochs / batches_per_epoch：训练轮数及每轮批次数；learning_rate：学习率；
 l2：正则化系数；early_stopping_patience：验证指标连续不改善的等待轮数；
 clip_predictions：是否将评分裁剪到 [1,5]。
@@ -44,7 +45,7 @@ project experiment --config configs/task1.json
 project experiment --config configs/task2.json
 ```
 
-目前配置可以正常读取；实验入口仍是占位函数，执行到它时会抛出 NotImplementedError。
+Task 2 全部命令、输入和产出详见 [执行说明](../docs/task2_doc.md)。
 
 模型目录示例：`../models/task1/random_forest`、`../models/task2/rating_regressor`。
 运行子目录按北京时间命名：`2026-10-16_14-30-25-123456_experiment`。

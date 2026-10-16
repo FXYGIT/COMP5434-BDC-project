@@ -1,16 +1,14 @@
 {
   "task": "task2",
-  "train_path": "../data/task2/train.csv",
-  "test_path": "../data/task2/test.csv",
-  "sample_path": "../data/task2/sample_submission.csv",
+  "train_path": "../data/task-2/train.csv",
+  "test_path": "../data/task-2/test.csv",
+  "sample_path": "../data/task-2/sampleSubmission.csv",
   "output_dir": "../runs/task2",
   "seed": 5434,
   "params": {
-    "spark_master": "local[*]",
-    "partitions": 8,
     "split_strategy": "stable_hash_group",
     "valid_fraction": 0.2,
-    "model": "custom_distributed_linear_regression",
+    "model": "sgd_regressor",
     "text_dimension_per_field": 65536,
     "use_title": true,
     "use_comment": true,
@@ -22,7 +20,9 @@
     "learning_rate": 0.01,
     "l2": 0.0001,
     "early_stopping_patience": 3,
-    "clip_predictions": true
+    "clip_predictions": true,
+    "max_train_rows": 50000,
+    "n_jobs": 1
   },
   "model_dir": "../models/task2/rating_regressor"
 }
