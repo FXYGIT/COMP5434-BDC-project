@@ -1,0 +1,18 @@
+{
+  "task": "task1",
+  "train_path": "../data/task1/train.csv",
+  "test_path": "../data/task1/test.csv",
+  "sample_path": "../data/task1/sample_submission.csv",
+  "output_dir": "../runs/task1",
+  "seed": 5434,
+  "params": {
+    "split_strategy": "stratified_group",
+    "valid_fraction": 0.2,
+    "model": "custom_random_forest",
+    "n_trees": 100,
+    "max_depth": 12,
+    "min_leaf_samples": 5,
+    "class_weight": "balanced",
+    "missing_indicators": true
+  }
+}

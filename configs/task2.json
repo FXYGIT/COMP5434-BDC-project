@@ -1,0 +1,27 @@
+{
+  "task": "task2",
+  "train_path": "../data/task2/train.csv",
+  "test_path": "../data/task2/test.csv",
+  "sample_path": "../data/task2/sample_submission.csv",
+  "output_dir": "../runs/task2",
+  "seed": 5434,
+  "params": {
+    "spark_master": "local[*]",
+    "partitions": 8,
+    "split_strategy": "stable_hash_group",
+    "valid_fraction": 0.2,
+    "model": "custom_distributed_linear_regression",
+    "text_dimension_per_field": 65536,
+    "use_title": true,
+    "use_comment": true,
+    "use_metadata": true,
+    "use_idf": true,
+    "use_target_encoding": false,
+    "epochs": 20,
+    "batches_per_epoch": 4,
+    "learning_rate": 0.01,
+    "l2": 0.0001,
+    "early_stopping_patience": 3,
+    "clip_predictions": true
+  }
+}

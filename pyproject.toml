@@ -1,0 +1,62 @@
+[project]
+name = "project"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "fengxy", email = "642526109@qq.com" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "numpy>=2.5.4",
+    "pre-commit>=4.7.0",
+    "pyspark>=4.2.0",
+]
+
+[project.scripts]
+project = "project:main"
+
+[build-system]
+requires = ["uv_build>=0.12.0,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "kaggle>=2.2.4",
+    "mypy>=2.4.0",
+    "ruff>=0.17.1",
+]
+
+[tool.ruff]
+target-version = "py313"
+line-length = 100
+
+[tool.ruff.lint]
+select = [
+    "E4",  # import 相关错误
+    "E7",  # 语句错误
+    "E9",  # 运行时错误
+    "F",   # 未使用变量、未定义名称等
+    "I",   # import 排序
+    "UP",  # 使用现代 Python 写法
+    "B",   # 常见易错写法
+]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+docstring-code-format = true
+
+[tool.mypy]
+python_version = "3.13"
+strict = true
+pretty = true
+show_error_codes = true
+warn_unreachable = true
+exclude = [
+    "^\\.venv/",
+    "^build/",
+    "^dist/",
+    "^scripts/",
+    "^tests/",
+]
