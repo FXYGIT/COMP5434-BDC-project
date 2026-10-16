@@ -9,11 +9,6 @@ from project.common.contracts import TaskConfig
 
 
 def load_config(path: Path) -> TaskConfig:
-    """读取配置文件并构建 TaskConfig
-
-    参数：path 为 JSON 文件路径，相对路径以当前工作目录为基准。
-    返回：包含任务名称、数据路径、输出目录、种子和模型参数的配置对象。
-    """
     path = path.resolve()
     with path.open(encoding="utf-8") as file:
         data = json.load(file)
@@ -25,6 +20,7 @@ def load_config(path: Path) -> TaskConfig:
         test_path=(base_dir / data["test_path"]).resolve(),
         sample_path=(base_dir / data["sample_path"]).resolve(),
         output_dir=(base_dir / data["output_dir"]).resolve(),
+        model_dir=(base_dir / data["model_dir"]).resolve(),
         seed=data["seed"],
         params=data["params"],
     )

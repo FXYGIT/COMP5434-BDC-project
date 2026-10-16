@@ -1,8 +1,8 @@
 {
   "task": "task1",
-  "train_path": "../data/task1/train.csv",
-  "test_path": "../data/task1/test.csv",
-  "sample_path": "../data/task1/sample_submission.csv",
+  "train_path": "../data/task-1/train.csv",
+  "test_path": "../data/task-1/test.csv",
+  "sample_path": "../data/task-1/sample_submission.csv",
   "output_dir": "../runs/task1",
   "seed": 5434,
   "params": {
@@ -14,5 +14,6 @@
     "min_leaf_samples": 5,
     "class_weight": "balanced",
     "missing_indicators": true
-  }
+  },
+  "model_dir": "../models/task1/random_forest"
 }

@@ -60,6 +60,7 @@ class PipelineTests(TestCase):
             self.root / "runs",
             5434,
             {"valid_fraction": 0.2, "split_strategy": "stable_hash_group"},
+            model_dir=self.root / "models",
         )
         self.bundle = ModelBundle(self.root / "model", self.root / "model/manifest.json")
 

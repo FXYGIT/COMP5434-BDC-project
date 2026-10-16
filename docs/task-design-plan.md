@@ -193,7 +193,7 @@ Task 2 模型包保存 `params`、`features_directory`、`model_directory`；后
 
 ## 6. 实验记录、复现与计时
 
-每次运行使用独立目录：`runs/<task>/<阶段>-<运行ID>/`。计划保存：
+每次运行使用独立目录：`runs/<task>/YYYY-MM-DD_HH-MM-SS-微秒_<阶段>/`（北京时间）。计划保存：
 
 - 任务配置与随机种子；依赖版本由项目依赖锁文件管理。
 - 训练/验证划分、数据审计、指标、epoch 日志。
@@ -212,6 +212,8 @@ Task 2 模型包保存 `params`、`features_directory`、`model_directory`；后
 | CSV 导出 | 单独计时，避免与推理时间混淆 |
 
 以上子阶段可能包含重叠，不能直接相加代替端到端时间。Spark 需要实际 action 才能说明计算已经完成。不同配置采用一致的冷热缓存口径。
+
+正式模型保存到配置的 `model_dir`（默认 `models/task1/random_forest` 或 `models/task2/rating_regressor`），不放在运行目录。已有模型目录不覆盖；重训新版本时可修改 model_dir。
 
 正式提交前，在新进程恢复模型并重新生成预测，核对 ID、行数和预测结果。分布式浮点归约可能有小差异，应明确容差，不承诺任意硬件完全逐位一致。
 
@@ -236,11 +238,11 @@ project train-final --config configs/task1.json
 project train-final --config configs/task2.json
 
 # 预测：将模型路径替换为对应训练返回的实际路径
-project predict --config configs/task1.json --model runs/task1/train-final-运行ID/model
-project predict --config configs/task2.json --model runs/task2/train-final-运行ID/model
+project predict --config configs/task1.json --model models/task1/random_forest
+project predict --config configs/task2.json --model models/task2/rating_regressor
 
 # 报告表格：输入已有实验运行目录
-project report-tables --runs runs/task1/experiment-运行ID runs/task2/experiment-运行ID --output-dir outputs/tables
+project report-tables --runs runs/task1/2026-10-16_14-30-25-123456_experiment runs/task2/2026-10-16_14-35-10-123456_experiment --output-dir outputs/tables
 ```
 
 ## 8. 当前进度与后续顺序

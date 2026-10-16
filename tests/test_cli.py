@@ -21,6 +21,7 @@ class CliTests(TestCase):
             Path("runs"),
             5434,
             {},
+            model_dir=Path("models"),
         )
         for task in ["task1", "task2"]:
             current = replace(config, task=task)

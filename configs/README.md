@@ -11,7 +11,8 @@
 | train_path | 训练数据文件 |
 | test_path | 测试数据文件 |
 | sample_path | 提交示例文件 |
-| output_dir | 运行产物根目录 |
+| output_dir | 按时间命名的运行记录根目录 |
+| model_dir | 正式模型保存目录，与运行目录独立 |
 | seed | 随机种子 |
 | params | 任务专属配置，原样传给后续模块 |
 
@@ -44,3 +45,7 @@ project experiment --config configs/task2.json
 ```
 
 目前配置可以正常读取；实验入口仍是占位函数，执行到它时会抛出 NotImplementedError。
+
+模型目录示例：`../models/task1/random_forest`、`../models/task2/rating_regressor`。
+运行子目录按北京时间命名：`2026-10-16_14-30-25-123456_experiment`。
+预测时直接用 `--model models/task1/random_forest` 指定已有模型。

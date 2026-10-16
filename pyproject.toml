@@ -9,8 +9,10 @@ authors = [
 requires-python = ">=3.13"
 dependencies = [
     "numpy>=2.5.4",
+    "pandas>=3.0.6",
     "pre-commit>=4.7.0",
     "pyspark>=4.2.0",
+    "scikit-learn>=1.9.1",
 ]
 
 [project.scripts]
@@ -60,3 +62,8 @@ exclude = [
     "^scripts/",
     "^tests/",
 ]
+
+# MVP 依赖尚未提供完整类型信息；仅放宽第三方导入，项目代码继续严格检查。
+[[tool.mypy.overrides]]
+module = ["pandas", "pandas.*", "sklearn", "sklearn.*"]
+ignore_missing_imports = true
