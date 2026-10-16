@@ -37,22 +37,25 @@ def _write_json(path: Path, data: Mapping[str, object]) -> Path:
 
 
 class ArtifactStore:
-    """管理一次运行的产物：model/ 模型包和 metrics.json 实验结果。"""
+    """分别管理运行结果和正式模型。
+
+    run_dir 只保存 metrics.json 等运行记录。
+    save_bundle 的 model_dir 显式指定正式模型位置，与 run_dir 无关。
+    模型包包含 state.pkl、manifest.json，以及模型组件自行保存的文件。
+    """
 
     def __init__(self, run_dir: Path) -> None:
-        """创建运行目录；允许使用 pipeline 已经创建好的目录。"""
         self.run_dir = run_dir
         self.run_dir.mkdir(parents=True, exist_ok=True)
 
-    def save_bundle(self, state: Mapping[str, object]) -> ModelBundle:
-        """保存模型/特征状态并返回模型包位置。
+    def save_bundle(self, state: Mapping[str, object], model_dir: Path) -> ModelBundle:
+        """将模型/特征状态保存到显式指定的 model_dir，并返回模型包位置。
 
         state.pkl 保存完整状态，支持嵌套字典及 NumPy 数组；manifest.json
         只记录格式版本和状态文件名。Task 2 的特征及回归器目录由各自模块保存。
         模型目录已存在时直接报错，避免覆盖；清单在状态写完后生成。
         """
-        model_dir = self.run_dir / "model"
-        model_dir.mkdir()
+        model_dir.mkdir(parents=True)
 
         state_path = model_dir / "state.pkl"
         temporary_path = model_dir / "state.pkl.tmp"

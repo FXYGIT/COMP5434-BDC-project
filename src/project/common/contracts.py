@@ -6,7 +6,10 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-type DenseMatrix = Sequence[Sequence[float]]
+import numpy as np
+from numpy.typing import NDArray
+
+type DenseMatrix = Sequence[Sequence[float]] | NDArray[np.float64]
 type SparseVector = Mapping[int, float]
 
 
@@ -24,6 +27,7 @@ class TaskConfig:
     output_dir: Path
     seed: int
     params: Mapping[str, object]
+    model_dir: Path  # 正式模型目录，独立于运行记录目录
 
 
 @dataclass(frozen=True)

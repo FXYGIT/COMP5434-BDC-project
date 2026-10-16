@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import asdict, replace
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
-from uuid import uuid4
 
 from project.common.artifacts import ArtifactStore
 from project.common.benchmark import BenchmarkRecorder, capture_hardware
@@ -28,7 +28,9 @@ if TYPE_CHECKING:
 
 def _prepare_run(config: TaskConfig, stage: str) -> TaskConfig:
     """创建独立运行目录并记录配置；不修改原配置对象。"""
-    run_dir = config.output_dir / f"{stage}-{uuid4().hex[:12]}"
+    # 北京时间，时间在前便于排序；微秒区分短时间内的多次运行。
+    timestamp = datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d_%H-%M-%S-%f")
+    run_dir = config.output_dir / f"{timestamp}_{stage}"
     run_dir.mkdir(parents=True)
     run_config = replace(config, output_dir=run_dir)
     set_random_seed(config.seed)
@@ -43,6 +45,7 @@ def _prepare_run(config: TaskConfig, stage: str) -> TaskConfig:
             "test_path": str(config.test_path),
             "sample_path": str(config.sample_path),
             "output_dir": str(run_dir),
+            "model_dir": str(config.model_dir),
         },
     )
     return run_config
@@ -164,7 +167,8 @@ def train_final(config: TaskConfig) -> ModelBundle:
                 "params": dict(config.params),
                 "features_directory": "features",
                 "model_directory": "regressor",
-            }
+            },
+            model_dir=config.model_dir,
         )
         features.save(bundle.directory / "features")
         model.save(bundle.directory / "regressor")

@@ -21,6 +21,7 @@ class ConfigTests(TestCase):
                         "test_path": "../data/task1/test.csv",
                         "sample_path": "../data/task1/sample_submission.csv",
                         "output_dir": "../runs/task1",
+                        "model_dir": "../models/task1/forest",
                         "seed": 5434,
                         "params": {"n_trees": 100, "missing_indicators": True},
                     }
@@ -52,6 +53,7 @@ class ConfigTests(TestCase):
                         "test_path": str(base / "test.csv"),
                         "sample_path": str(base / "sample.csv"),
                         "output_dir": str(base / "output"),
+                        "model_dir": str(base / "models"),
                         "seed": 42,
                         "params": {"spark_master": "local[*]"},
                     }

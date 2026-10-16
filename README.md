@@ -22,3 +22,7 @@ python -m zipfile -e "./data/task-1/comp-5434-20261-project-task-1.zip" "./data/
 kaggle competitions download comp-5434-20261-project-task-2 -p ./data/task-2
 python -m zipfile -e "./data/task-2/comp-5434-20261-project-task-2.zip" "./data/task-2"
 ```
+
+2. 开始实验
+
+task1 实验文档： ./docs/task1_doc.md
