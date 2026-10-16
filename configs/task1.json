@@ -13,7 +13,8 @@
     "max_depth": 12,
     "min_leaf_samples": 5,
     "class_weight": "balanced",
-    "missing_indicators": true
+    "missing_indicators": true,
+    "max_features": 4
   },
   "model_dir": "../models/task1/random_forest"
 }
