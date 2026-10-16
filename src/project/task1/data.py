@@ -10,9 +10,32 @@ from sklearn.model_selection import train_test_split
 
 from project.common.contracts import SplitIds
 
+# 标签的合法取值，共四类天气；分层划分和最终提交都以它为准。
+LABELS = (1, 2, 3, 4)
+
+
+def _profile(series: pd.Series) -> dict[str, object]:
+    """统计单个属性：数据类型、缺失个数、不同取值个数。
+
+    整列都能当数字看时按数值属性处理，额外给出最小值和最大值；
+    否则按类别属性处理，列出全部取值，方便人工核对编码范围。
+    """
+    profile: dict[str, object] = {
+        "dtype": str(series.dtype),
+        "missing": int(series.isna().sum()),
+        "unique": int(series.nunique()),
+    }
+    numbers = pd.to_numeric(series, errors="coerce")
+    if numbers.notna().all():
+        profile["min"] = float(numbers.min())
+        profile["max"] = float(numbers.max())
+    else:
+        profile["values"] = sorted(str(value) for value in series.dropna().unique())
+    return profile
+
 
 class WeatherDataset:
-    """保留原始 ID 和列名，特征禁止包含 ID 和 label。"""
+    """保留原始 ID 和列名；特征中不得出现 ID 和 label。"""
 
     def __init__(self, train_path: Path, test_path: Path) -> None:
         self.train_path = train_path
@@ -21,12 +44,12 @@ class WeatherDataset:
     def load(
         self,
     ) -> tuple[Sequence[Mapping[str, object]], Sequence[Mapping[str, object]]]:
-        """读取带标签训练表和无标签测试表；保留缺失值，不静默删除测试行。
+        """读取带标签训练表和无标签测试表；保留缺失值，不静默删除任何一行。
 
         参数：
             无显式业务参数；对象方法使用初始化时声明的状态。
         返回：
-            tuple[Sequence[Mapping[str, object]], Sequence[Mapping[str, object]]]：按类型标注返回结构化结果；字段含义及顺序见本函数职责和公共数据契约。
+            tuple[Sequence[Mapping[str, object]], Sequence[Mapping[str, object]]]：训练记录在前、测试记录在后。
         """
         train = pd.read_csv(self.train_path)
         test = pd.read_csv(self.test_path)
@@ -34,47 +57,91 @@ class WeatherDataset:
         return train.to_dict("records"), test.to_dict("records")
 
     def audit(self, rows: Sequence[Mapping[str, object]], labeled: bool) -> Mapping[str, object]:
-        """检查 ID、10 个属性、标签域、类型、重复行、缺失、异常值、类别分布；禁止预设未确认的属性名称。
+        """体检一张表并返回报告，只读不改，报告可直接写进 metrics.json。
+
+        检查项：行数、id 是否缺失或重复、每个属性的数据类型/缺失/取值范围、
+        完全重复的行；labeled 为 True 时再检查 label 是否存在、是否都落在
+        LABELS 以及各类别数量。发现的问题汇总在 problems 里，用英文短标签，
+        空列表表示没发现问题。
 
         参数：
-            rows (Sequence[Mapping[str, object]])：输入记录；保持 ID 对齐，按当前函数契约决定是否含标签
-            labeled (bool)：是否要求目标字段；测试表必须按无标签模式校验
+            rows (Sequence[Mapping[str, object]])：输入记录；保持 ID 对齐
+            labeled (bool)：训练表传 True，测试表传 False
         返回：
-            Mapping[str, object]：按类型标注返回结构化结果；字段含义及顺序见本函数职责和公共数据契约。
+            Mapping[str, object]：体检报告，键为 rows/columns/duplicate_rows/missing_cells/
+            attributes，训练表额外含 label_distribution，另有 problems 问题清单。
         """
-        df = pd.DataFrame(rows)
+        frame = pd.DataFrame(rows)
+        problems: list[str] = []
 
-        result = {
-            "rows": len(df),
-            "columns": list(df.columns),
-            "missing": df.isna().sum().to_dict(),
-            "duplicates": int(df.duplicated().sum()),
+        duplicate_rows = int(frame.duplicated().sum())
+        if duplicate_rows:
+            problems.append(f"duplicate rows: {duplicate_rows}")
+
+        if "id" not in frame.columns:
+            problems.append("column 'id' is missing")
+        else:
+            missing_ids = int(frame["id"].isna().sum())
+            if missing_ids:
+                problems.append(f"column 'id' has {missing_ids} missing values")
+            if not frame["id"].is_unique:
+                duplicate_ids = int(frame["id"].duplicated().sum())
+                problems.append(f"column 'id' has {duplicate_ids} duplicate values")
+
+        attributes = [name for name in frame.columns if name not in ("id", "label")]
+
+        report: dict[str, object] = {
+            "rows": int(len(frame)),
+            "columns": [str(name) for name in frame.columns],
+            "duplicate_rows": duplicate_rows,
+            "missing_cells": int(frame.isna().sum().sum()),
+            "attributes": {str(name): _profile(frame[name]) for name in attributes},
         }
 
-        if labeled and "label" in df:
-            result["label_distribution"] = df["label"].value_counts().to_dict()
+        if labeled:
+            if "label" not in frame.columns:
+                problems.append("column 'label' is missing")
+            else:
+                labels = frame["label"]
+                missing_labels = int(labels.isna().sum())
+                if missing_labels:
+                    problems.append(f"column 'label' has {missing_labels} missing values")
+                seen = labels.dropna().unique().tolist()
+                unexpected = sorted(set(seen) - set(LABELS), key=str)
+                if unexpected:
+                    problems.append(f"column 'label' has unexpected values: {unexpected}")
+                distribution = {
+                    str(value): int(count) for value, count in labels.value_counts().items()
+                }
+                report["label_distribution"] = dict(sorted(distribution.items()))
 
-        return result
+        report["problems"] = problems
+        return report
 
     def split(
         self, rows: Sequence[Mapping[str, object]], valid_fraction: float, seed: int
     ) -> SplitIds:
-        """按标签分层划分并持久化 ID；重复特征记录需成组划分，降低相同记录跨集合泄漏。
+        """按标签分层切分训练/验证集，返回互斥且可重放的 ID。
+
+        本数据不存在重复特征记录，按行分层即可；若以后出现重复记录，
+        需要改成按组划分，避免同一条记录同时落进训练集和验证集。
 
         参数：
-            rows (Sequence[Mapping[str, object]])：输入记录；保持 ID 对齐，按当前函数契约决定是否含标签
-            valid_fraction (float)：验证集比例，范围应为 0 到 1 的开区间
-            seed (int)：固定随机种子；与数据划分和模型随机状态共同记录
+            rows (Sequence[Mapping[str, object]])：训练表记录；必须含 id 和 label
+            valid_fraction (float)：验证集比例，取值需在 0 到 1 之间
+            seed (int)：固定随机种子，保证同一份数据每次切分结果一致
         返回：
-            SplitIds：互斥且可重放的训练/验证 ID 集合。
+            SplitIds：训练 ID 和验证 ID，两者互斥。
         """
-        df = pd.DataFrame(rows)
+        if not 0 < valid_fraction < 1:
+            raise ValueError(f"valid_fraction must be between 0 and 1, got {valid_fraction}")
 
+        frame = pd.DataFrame(rows)
         train_ids, valid_ids = train_test_split(
-            df["id"],
+            frame["id"],
             test_size=valid_fraction,
             random_state=seed,
-            stratify=df["label"],
+            stratify=frame["label"],
         )
 
         return SplitIds(
