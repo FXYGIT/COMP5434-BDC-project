@@ -1,4 +1,8 @@
-"""Task 2 必须实际执行的 Spark 分布式运行时。"""
+"""后续 Spark 接入预留接口；当前 local MVP 的全部命令均不导入或调用此模块。
+
+保留原会话生命周期和资源说明，便于后续实现真实分布式版本。不能把本地 joblib
+线程的耗时或机器数写成 Spark 集群结果；启用 Spark 时需完成本模块及 DataFrame 路径。
+"""
 
 from __future__ import annotations
 

@@ -13,6 +13,8 @@ dependencies = [
     "pre-commit>=4.7.0",
     "pyspark>=4.2.0",
     "scikit-learn>=1.9.1",
+    "scipy>=1.18.1",
+    "joblib>=1.6.0",
 ]
 
 [project.scripts]
@@ -65,5 +67,5 @@ exclude = [
 
 # MVP 依赖尚未提供完整类型信息；仅放宽第三方导入，项目代码继续严格检查。
 [[tool.mypy.overrides]]
-module = ["pandas", "pandas.*", "sklearn", "sklearn.*"]
+module = ["pandas", "pandas.*", "sklearn", "sklearn.*", "scipy", "scipy.*", "joblib", "joblib.*"]
 ignore_missing_imports = true

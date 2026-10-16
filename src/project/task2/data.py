@@ -1,63 +1,66 @@
-"""分布式读取评论 CSV；正确处理引号、逗号和多行评论。"""
+"""本地评论 CSV 读取与可重放划分；后续可替换为 Spark schema/聚合实现。
+
+CSV 中的逗号、引号和多行文本交由 pandas 解析。MVP 信任输入，不增加额外
+校验；只在显式 max_rows 配置存在时截取训练记录，测试集始终完整读取。
+"""
 
 from __future__ import annotations
 
 from collections.abc import Mapping
 from pathlib import Path
-from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    from pyspark.sql import DataFrame, SparkSession
+import pandas as pd
 
 
-def read_reviews(spark: SparkSession, path: Path, labeled: bool) -> DataFrame:
-    """显式 schema 读取，ID 按字符串保存；支持 multiline 和 escaped quote；坏记录隔离计数，不能静默丢失测试记录。
+def read_reviews(path: Path, labeled: bool, max_rows: int | None = None) -> pd.DataFrame:
+    """读取评论表，保留字符串 ID，并把缺失标题/正文视为空文本。
 
-    参数：
-        spark (SparkSession)：已创建且未关闭的 SparkSession
-        path (Path)：输入路径；调用者负责提供正确的文件/目录类型
-        labeled (bool)：是否要求目标字段；测试表必须按无标签模式校验
-    返回：
-        DataFrame：保留分布式执行的数据表，schema 依上文约定。
-    实现边界：
-        只实现本接口声明的职责；训练/验证隔离、ID 对齐及状态恢复遵循架构文档。
-        不允许静默丢弃测试记录、把未测数据填零或生成虚构评估结果。
-    当前状态：
-        骨架占位；调用即抛出 NotImplementedError，不执行实际业务。"""
-    raise NotImplementedError("仅定义接口，尚未实现")
+    参数：path 为 CSV 路径；labeled 区分训练和测试；max_rows 仅限制训练行数，
+    None 表示读取全部训练数据。返回 pandas DataFrame，列名与原 CSV 一致。
+    后续 Spark 实现需使用显式 schema、multiline 和 escaped quote，并记录坏行。
+    """
+    frame = pd.read_csv(
+        path,
+        dtype={"id": str, "user_id": str, "prod_id": str, "parent_prod_id": str},
+        nrows=max_rows if labeled else None,
+    )
+    frame[["title", "comment"]] = frame[["title", "comment"]].fillna("")
+    return frame
 
 
-def audit_reviews(frame: DataFrame, labeled: bool) -> Mapping[str, object]:
-    """通过分布式聚合检查字段、唯一 ID、评分 1..5、缺失和文本长度；只收集小规模统计。
+def audit_reviews(frame: pd.DataFrame, labeled: bool) -> Mapping[str, object]:
+    """返回当前实际读取行数、缺失统计及可选评分分布，不拒绝或删除记录。
 
-    参数：
-        frame (DataFrame)：Spark 分布式表；不得将全量数据收集到 driver
-        labeled (bool)：是否要求目标字段；测试表必须按无标签模式校验
-    返回：
-        Mapping[str, object]：按类型标注返回结构化结果；字段含义及顺序见本函数职责和公共数据契约。
-    实现边界：
-        只实现本接口声明的职责；训练/验证隔离、ID 对齐及状态恢复遵循架构文档。
-        不允许静默丢弃测试记录、把未测数据填零或生成虚构评估结果。
-    当前状态：
-        骨架占位；调用即抛出 NotImplementedError，不执行实际业务。"""
-    raise NotImplementedError("仅定义接口，尚未实现")
+    参数：frame 为原始评论表，labeled=True 时统计 rating。返回可写入 JSON 的
+    小型字典；行数反映本次数据范围，不把采样结果称为全量。未来改为分布式聚合。
+    """
+    result: dict[str, object] = {
+        "rows": len(frame),
+        "columns": list(frame.columns),
+        "missing": frame.isna().sum().to_dict(),
+    }
+    if labeled:
+        result["rating_distribution"] = frame["rating"].value_counts().to_dict()
+    return result
 
 
 def split_reviews(
-    frame: DataFrame, strategy: str, valid_fraction: float, seed: int
-) -> tuple[DataFrame, DataFrame]:
-    """实现稳定 ID 哈希随机划分或时间划分，保存 ID 与策略；重复评论成组，验证标签不进入训练。时间切分作为泛化诊断，不能预先假定测试生成机制。
+    frame: pd.DataFrame, strategy: str, valid_fraction: float, seed: int
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """返回互斥的训练/验证表；固定种子与输入可重放，各方案共用同一划分。
 
-    参数：
-        frame (DataFrame)：Spark 分布式表；不得将全量数据收集到 driver
-        strategy (str)：预先声明的划分策略，不能根据测试标签选择
-        valid_fraction (float)：验证集比例，范围应为 0 到 1 的开区间
-        seed (int)：固定随机种子；与数据划分和模型随机状态共同记录
-    返回：
-        tuple[DataFrame, DataFrame]：按类型标注返回结构化结果；字段含义及顺序见本函数职责和公共数据契约。
-    实现边界：
-        只实现本接口声明的职责；训练/验证隔离、ID 对齐及状态恢复遵循架构文档。
-        不允许静默丢弃测试记录、把未测数据填零或生成虚构评估结果。
-    当前状态：
-        骨架占位；调用即抛出 NotImplementedError，不执行实际业务。"""
-    raise NotImplementedError("仅定义接口，尚未实现")
+    stable_hash_group 对完全相同的 title/comment 文本组做稳定哈希，不使用 rating，
+    同一评论组不会跨集合；stable_hash 对 ID 哈希；time 按毫秒时间字段排序切分。
+    valid_fraction 是哈希划分的期望比例（实际比例可略有差异）。不修改输入表。
+    后续 Spark 实现可用等价稳定哈希或时间排序，保存 ID 及分组规则供重放。
+    """
+    if strategy == "time":
+        ordered = frame.sort_values("time", kind="stable")
+        boundary = int(len(ordered) * (1 - valid_fraction))
+        return ordered.iloc[:boundary].copy(), ordered.iloc[boundary:].copy()
+    columns = ["title", "comment"] if strategy == "stable_hash_group" else ["id"]
+    keys = frame[columns].fillna("").astype(str).copy()
+    keys["_split_seed"] = str(seed)
+    hashed = pd.util.hash_pandas_object(keys, index=False)
+    valid = hashed % 1_000_000 < valid_fraction * 1_000_000
+    return frame.loc[~valid].copy(), frame.loc[valid].copy()

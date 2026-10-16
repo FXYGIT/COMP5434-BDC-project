@@ -1,15 +1,13 @@
-"""流程编排测试：依赖模块仍为骨架，用替身验证调用和数据流。"""
+"""Task 1 流程编排测试；Task 2 本地集成覆盖见 test_task2_local.py。"""
 
 from contextlib import contextmanager
-from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import TestCase, main
-from unittest.mock import DEFAULT, MagicMock, patch
+from unittest.mock import DEFAULT, patch
 
 from project.common.contracts import EvaluationResult, ModelBundle, TaskConfig
 from project.task1 import pipeline as task1
-from project.task2 import pipeline as task2
 
 
 @contextmanager
@@ -19,31 +17,12 @@ def dependencies(module, names):
         yield mocks
 
 
-def frame(name):
-    result = MagicMock(name=name)
-    result.cache.return_value = result
-    return result
-
-
 COMMON = [
     "set_random_seed",
     "ArtifactStore",
     "BenchmarkRecorder",
     "capture_hardware",
     "write_run_manifest",
-]
-TASK2 = COMMON + [
-    "create_session",
-    "close_session",
-    "describe_cluster",
-    "read_reviews",
-    "audit_reviews",
-    "split_reviews",
-    "ReviewFeaturePipeline",
-    "DistributedRatingRegressor",
-    "evaluate_ratings",
-    "evaluate_slices",
-    "export_rating_submission",
 ]
 
 
@@ -113,102 +92,6 @@ class PipelineTests(TestCase):
             batch = dep["export_weather_submission"].call_args.args[0]
             self.assertEqual(list(batch.ids), ["x", "y"])
             self.assertEqual(list(batch.values), [1, 4])
-
-    def test_task2_experiment_uses_training_only_and_materializes(self):
-        config = replace(self.config, task="task2")
-        raw, train, valid = frame("raw"), frame("train"), frame("valid")
-        train_x, valid_x, predictions, scored = (
-            frame("train_x"),
-            frame("valid_x"),
-            frame("pred"),
-            frame("scored"),
-        )
-        with dependencies(task2, TASK2) as dep:
-            dep["read_reviews"].return_value = raw
-            dep["split_reviews"].return_value = train, valid
-            feature = dep["ReviewFeaturePipeline"].return_value
-            feature.transform_training.return_value = train_x
-            feature.transform.return_value = valid_x
-            model = dep["DistributedRatingRegressor"].return_value
-            model.fit.return_value = []
-            model.predict.return_value = predictions
-            predictions.join.return_value = scored
-            dep["evaluate_ratings"].return_value = {"rmse": 0.5, "mae": 0.3}
-            dep["evaluate_slices"].return_value = {"cold_rmse": 0.7}
-            result = task2.run_experiment(config)
-            self.assertEqual(result.primary_value, 0.5)
-            feature.fit.assert_called_once_with(train)
-            feature.transform_training.assert_called_once_with(train)
-            feature.transform.assert_called_once_with(valid)
-            model.fit.assert_called_once_with(train_x, valid_x)
-            predictions.join.assert_called_once_with(valid, on="id", how="inner")
-            train_x.count.assert_called_once()
-            valid_x.count.assert_called_once()
-            scored.count.assert_called_once()
-            for cached in [train_x, valid_x, scored]:
-                cached.unpersist.assert_called_once()
-            dep["close_session"].assert_called_once_with(dep["create_session"].return_value)
-
-    def test_task2_final_saves_features_and_model(self):
-        config = replace(self.config, task="task2")
-        train, train_x = frame("train"), frame("train_x")
-        with dependencies(task2, TASK2) as dep:
-            dep["read_reviews"].return_value = train
-            dep["ReviewFeaturePipeline"].return_value.transform_training.return_value = train_x
-            dep["DistributedRatingRegressor"].return_value.fit.return_value = []
-            dep["ArtifactStore"].return_value.save_bundle.return_value = self.bundle
-            self.assertIs(task2.train_final(config), self.bundle)
-            dep["DistributedRatingRegressor"].return_value.fit.assert_called_once_with(train_x)
-            dep["ReviewFeaturePipeline"].return_value.save.assert_called_once_with(
-                self.bundle.directory / "features"
-            )
-            dep["DistributedRatingRegressor"].return_value.save.assert_called_once_with(
-                self.bundle.directory / "regressor"
-            )
-            train_x.unpersist.assert_called_once()
-            dep["close_session"].assert_called_once()
-
-    def test_task2_prediction_restores_without_fitting(self):
-        config = replace(self.config, task="task2")
-        test, predictions = frame("test"), frame("predictions")
-        with dependencies(task2, TASK2) as dep:
-            dep["ArtifactStore"].return_value.load_bundle.return_value = {
-                "params": {"saved": True},
-                "features_directory": "features",
-                "model_directory": "regressor",
-            }
-            dep["read_reviews"].return_value = test
-            dep["DistributedRatingRegressor"].return_value.predict.return_value = predictions
-            dep["export_rating_submission"].return_value = self.root / "submission.csv"
-            output = task2.predict_submission(config, self.bundle)
-            self.assertEqual(output, self.root / "submission.csv")
-            dep["read_reviews"].assert_called_once_with(
-                dep["create_session"].return_value, config.test_path, labeled=False
-            )
-            dep["ReviewFeaturePipeline"].return_value.load.assert_called_once_with(
-                self.bundle.directory / "features"
-            )
-            dep["DistributedRatingRegressor"].return_value.load.assert_called_once_with(
-                self.bundle.directory / "regressor"
-            )
-            dep["ReviewFeaturePipeline"].return_value.fit.assert_not_called()
-            dep["DistributedRatingRegressor"].return_value.fit.assert_not_called()
-            predictions.count.assert_called_once()
-            predictions.unpersist.assert_called_once()
-            dep["close_session"].assert_called_once()
-
-    def test_task2_training_failure_closes_session_and_unpersists(self):
-        config = replace(self.config, task="task2")
-        train_x = frame("train_x")
-        with dependencies(task2, TASK2) as dep:
-            dep["ReviewFeaturePipeline"].return_value.transform_training.return_value = train_x
-            dep["DistributedRatingRegressor"].return_value.fit.side_effect = RuntimeError(
-                "training failed"
-            )
-            with self.assertRaisesRegex(RuntimeError, "training failed"):
-                task2.train_final(config)
-            train_x.unpersist.assert_called_once()
-            dep["close_session"].assert_called_once()
 
 
 if __name__ == "__main__":

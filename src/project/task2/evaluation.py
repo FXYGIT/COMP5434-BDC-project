@@ -1,40 +1,46 @@
-"""仅收集聚合统计的 RMSE 及冷启动诊断。"""
+"""本地 RMSE/MAE 和误差切片；未来改为 Spark 聚合而非收集全量预测。"""
 
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    from pyspark.sql import DataFrame
-
-
-def evaluate_ratings(predictions: DataFrame) -> Mapping[str, float]:
-    """输入 id,rating,prediction；用分布式 sum squared error 和 count 计算 RMSE/MAE；检查 join 后数量和非有限预测；不 collect 行。
-
-    参数：
-        predictions (DataFrame)：带 ID 的预测；评估接口还要求真实 rating，参见原始职责说明
-    返回：
-        Mapping[str, float]：按类型标注返回结构化结果；字段含义及顺序见本函数职责和公共数据契约。
-    实现边界：
-        只实现本接口声明的职责；训练/验证隔离、ID 对齐及状态恢复遵循架构文档。
-        不允许静默丢弃测试记录、把未测数据填零或生成虚构评估结果。
-    当前状态：
-        骨架占位；调用即抛出 NotImplementedError，不执行实际业务。"""
-    raise NotImplementedError("仅定义接口，尚未实现")
+import pandas as pd
+from sklearn.metrics import mean_absolute_error, root_mean_squared_error
 
 
-def evaluate_slices(predictions: DataFrame, train: DataFrame) -> Mapping[str, float]:
-    """对已见/未见用户、商品、评分区间和文本长度分组评估，报告每组样本数；用户/商品元信息通过 ID join 获取。
+def evaluate_ratings(predictions: pd.DataFrame) -> Mapping[str, float]:
+    """从含 rating,prediction 的评分表计算 RMSE/MAE，返回浮点指标字典。
 
-    参数：
-        predictions (DataFrame)：带 ID 的预测；评估接口还要求真实 rating，参见原始职责说明
-        train (DataFrame)：当前训练折或锁定配置后的全量训练表，不能包含验证记录
-    返回：
-        Mapping[str, float]：按类型标注返回结构化结果；字段含义及顺序见本函数职责和公共数据契约。
-    实现边界：
-        只实现本接口声明的职责；训练/验证隔离、ID 对齐及状态恢复遵循架构文档。
-        不允许静默丢弃测试记录、把未测数据填零或生成虚构评估结果。
-    当前状态：
-        骨架占位；调用即抛出 NotImplementedError，不执行实际业务。"""
-    raise NotImplementedError("仅定义接口，尚未实现")
+    上层已按 ID 接回真实评分；本函数不改变评分、不裁剪、不参与拟合。当前直接
+    使用 sklearn，手写时分别累计平方误差、绝对误差和行数后统一归一化。
+    """
+    return {
+        "rmse": float(root_mean_squared_error(predictions["rating"], predictions["prediction"])),
+        "mae": float(mean_absolute_error(predictions["rating"], predictions["prediction"])),
+    }
+
+
+def evaluate_slices(predictions: pd.DataFrame, train: pd.DataFrame) -> Mapping[str, float]:
+    """输出已见/未见用户和商品、评分档位、正文长度分组的样本数与 RMSE。
+
+    predictions 需含 rating,prediction,user_id,prod_id,comment；train 仅用于判断
+    实体是否已见，不能包含验证记录。空组只报告 count=0，不捏造 RMSE=0。
+    后续 Spark 可通过训练实体表 join 和 groupBy 累积同样统计，避免 collect 全表。
+    """
+    groups = {}
+    for column, name in (("user_id", "user"), ("prod_id", "product")):
+        seen = predictions[column].isin(train[column])
+        groups[f"seen_{name}"] = seen
+        groups[f"unseen_{name}"] = ~seen
+    for rating in range(1, 6):
+        groups[f"rating_{rating}"] = predictions["rating"] == rating
+    short = predictions["comment"].fillna("").str.len() < 100
+    groups["short_text"] = short
+    groups["long_text"] = ~short
+    result: dict[str, float] = {}
+    for name, mask in groups.items():
+        subset = predictions.loc[mask]
+        result[f"{name}_count"] = float(len(subset))
+        if len(subset):
+            result[f"{name}_rmse"] = evaluate_ratings(subset)["rmse"]
+    return result

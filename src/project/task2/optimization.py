@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 
@@ -10,7 +11,11 @@ from project.common.contracts import SparseVector
 
 @dataclass(frozen=True)
 class GradientStats:
-    """分区数据损失及梯度的和；正则化在全局更新时仅添加一次。"""
+    """分区数据损失及梯度的和；正则化在全局更新时仅添加一次。
+
+    gradient_sum/bias_gradient_sum 是半平方误差的梯度和，squared_error_sum 是
+    未除二的平方误差和，count 为行数；空分区使用空字典和全零标量作为中性元。
+    """
 
     gradient_sum: Mapping[int, float]
     bias_gradient_sum: float
@@ -33,8 +38,17 @@ def partition_gradient(
         只实现本接口声明的职责；训练/验证隔离、ID 对齐及状态恢复遵循架构文档。
         不允许静默丢弃测试记录、把未测数据填零或生成虚构评估结果。
     当前状态：
-        骨架占位；调用即抛出 NotImplementedError，不执行实际业务。"""
-    raise NotImplementedError("仅定义接口，尚未实现")
+        本地纯函数参考实现；主训练流程使用 sklearn SGD，未来 Spark 可调用此接口。"""
+    gradients: dict[int, float] = defaultdict(float)
+    bias_gradient, error_sum, count = 0.0, 0.0, 0
+    for features, target in rows:
+        error = sum(weights[index] * value for index, value in features.items()) + bias - target
+        for index, value in features.items():
+            gradients[index] += error * value
+        bias_gradient += error
+        error_sum += error * error
+        count += 1
+    return GradientStats(dict(gradients), bias_gradient, error_sum, count)
 
 
 def merge_gradients(left: GradientStats, right: GradientStats) -> GradientStats:
@@ -49,8 +63,16 @@ def merge_gradients(left: GradientStats, right: GradientStats) -> GradientStats:
         只实现本接口声明的职责；训练/验证隔离、ID 对齐及状态恢复遵循架构文档。
         不允许静默丢弃测试记录、把未测数据填零或生成虚构评估结果。
     当前状态：
-        骨架占位；调用即抛出 NotImplementedError，不执行实际业务。"""
-    raise NotImplementedError("仅定义接口，尚未实现")
+        本地纯函数参考实现；主训练流程使用 sklearn SGD，未来 Spark 可调用此接口。"""
+    gradients = dict(left.gradient_sum)
+    for index, value in right.gradient_sum.items():
+        gradients[index] = gradients.get(index, 0.0) + value
+    return GradientStats(
+        gradients,
+        left.bias_gradient_sum + right.bias_gradient_sum,
+        left.squared_error_sum + right.squared_error_sum,
+        left.count + right.count,
+    )
 
 
 def update_parameters(
@@ -74,5 +96,9 @@ def update_parameters(
         只实现本接口声明的职责；训练/验证隔离、ID 对齐及状态恢复遵循架构文档。
         不允许静默丢弃测试记录、把未测数据填零或生成虚构评估结果。
     当前状态：
-        骨架占位；调用即抛出 NotImplementedError，不执行实际业务。"""
-    raise NotImplementedError("仅定义接口，尚未实现")
+        本地纯函数参考实现；主训练流程使用 sklearn SGD，未来 Spark 可调用此接口。"""
+    updated = [
+        weight - learning_rate * (stats.gradient_sum.get(index, 0.0) / stats.count + l2 * weight)
+        for index, weight in enumerate(weights)
+    ]
+    return updated, bias - learning_rate * stats.bias_gradient_sum / stats.count
