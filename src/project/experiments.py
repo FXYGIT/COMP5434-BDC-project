@@ -59,7 +59,7 @@ def run_baselines(config: TaskConfig) -> Sequence[Mapping[str, object]]:
 
 
 def run_ablations(config: TaskConfig) -> Sequence[Mapping[str, object]]:
-    """Task 1 对比类别权重/缺失指示/森林与单树；Task 2 去除 title、comment、元数据或 IDF；每次只改变一个因素。
+    """Task 1 对比类别权重/bootstrap/森林与单树；Task 2 去除 title、comment、元数据或 IDF；每次只改变一个因素。
 
     参数：
         config (TaskConfig)：已解析并通过字段校验的任务配置
@@ -88,7 +88,10 @@ def run_ablations(config: TaskConfig) -> Sequence[Mapping[str, object]]:
         [
             ("full", {}),
             ("no_class_weight", {"class_weight": None}),
-            ("no_missing_indicators", {"missing_indicators": False}),
+            # 不再用 missing_indicators 做消融：本数据没有缺失值，7 个掩码列恒为 0，
+            # 而模型又会把整列恒定的特征从候选池里剔除，于是 full 和 no_missing_indicators
+            # 拿到的是同一份候选池、建出完全相同的树，差异恒为 0，这一臂没有信息量。
+            ("no_bootstrap", {"bootstrap": False}),
             ("single_tree", {"model": "single_tree"}),
         ],
         "ablate",
@@ -98,7 +101,9 @@ def run_ablations(config: TaskConfig) -> Sequence[Mapping[str, object]]:
 def run_scaling_study(
     config: TaskConfig, parallelisms: Sequence[int]
 ) -> Sequence[Mapping[str, object]]:
-    """固定数据、模型、epoch 和缓存口径，改变 Spark 并行度；报告耗时、加速比和指标变化；不得把不同工作量直接比较。
+    """固定数据、模型和缓存口径，只改并行度；报告耗时、加速比和指标变化；不得把不同工作量直接比较。
+
+    task1 改的是手写森林的按树线程数（n_jobs），task2 改的是 Spark 并行度。
 
     参数：
         config (TaskConfig)：已解析并通过字段校验的任务配置

@@ -8,15 +8,17 @@ from time import perf_counter
 from typing import Any, cast
 
 import pandas as pd
-from sklearn.dummy import DummyClassifier
 from sklearn.metrics import accuracy_score, confusion_matrix, f1_score
-from sklearn.tree import DecisionTreeClassifier
 
 from project.common.artifacts import ArtifactStore
 from project.common.contracts import EvaluationResult, ModelBundle, SplitIds, TaskConfig
 from project.task1.data import WeatherDataset
 from project.task1.features import WeatherPreprocessor
-from project.task1.model import RandomForestClassifier
+from project.task1.model import (
+    DecisionTreeClassifier,
+    MajorityClassifier,
+    RandomForestClassifier,
+)
 
 
 def _options(config: TaskConfig) -> dict[str, object]:
@@ -27,16 +29,15 @@ def _options(config: TaskConfig) -> dict[str, object]:
 
 
 def _candidate(options: dict[str, object], seed: int) -> Any:
-    # MVP 直接调用 sklearn；后续用自定义多数类统计、CART 和森林替换。
+    """按 options["model"] 选模型；三个分支都是自己实现的，接口一致。
+
+    单树和森林的每棵树用完全相同的参数和分裂规则（同样的 Gini、类别权重和
+    子特征抽样），所以消融里「单树 vs 森林」的差异只来自多树聚合本身。
+    """
     if options.get("model") == "majority":
-        return DummyClassifier(strategy="most_frequent")
+        return MajorityClassifier()
     if options.get("model") == "single_tree":
-        return DecisionTreeClassifier(
-            max_depth=options.get("max_depth"),
-            min_samples_leaf=options["min_samples_leaf"],
-            class_weight=options.get("class_weight"),
-            random_state=seed,
-        )
+        return DecisionTreeClassifier(options, seed)
     return RandomForestClassifier(options, seed)
 
 
@@ -71,7 +72,11 @@ def evaluate_candidate(config: TaskConfig) -> EvaluationResult:
     preprocessor.fit(train.to_dict("records"))
     x_train = preprocessor.transform(train.to_dict("records"))
     model = _candidate(options, config.seed)
+    # 单独给模型训练计时：training_seconds 还包含串行的特征拟合和转换，
+    # 用它算并行加速比会被这段串行部分稀释。
+    model_started = perf_counter()
     model.fit(x_train, train["label"].tolist())
+    model_seconds = perf_counter() - model_started
     training_seconds = perf_counter() - started
     predicted = model.predict(preprocessor.transform(valid.to_dict("records")))
     truth = valid["label"].tolist()
@@ -79,6 +84,7 @@ def evaluate_candidate(config: TaskConfig) -> EvaluationResult:
     diagnostics = {
         "accuracy": float(accuracy_score(truth, predicted)),
         "training_seconds": training_seconds,
+        "model_seconds": model_seconds,
     }
     for label, score in zip(
         labels,
